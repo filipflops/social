@@ -1,2 +1,3 @@
-git+https://github.com/mahrtayyab/tweety.git
+git+https://github.com/Ishannaik/tweety.git@fix/ondemand-home-fallback
+linkedin-api>=2.3.1
 requests
