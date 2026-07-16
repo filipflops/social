@@ -1,2 +1,2 @@
-tweety-ns
+git+https://github.com/mahrtayyab/tweety.git
 requests
