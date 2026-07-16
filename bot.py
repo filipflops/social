@@ -9,9 +9,11 @@ TWITTER_USERNAME = "heuresia"
 app = Twitter("session")
 app.load_auth_token(TWITTER_AUTH_TOKEN)
 
-tweets = app.get_tweets(TWITTER_USERNAME)
+search_results = app.search(f"from:{TWITTER_USERNAME}")
+tweets = list(search_results)
+
 if not tweets:
-    print("Brak tweetów lub błąd pobierania.")
+    print("No tweets found or fetch error.")
     exit()
 
 latest_tweet = tweets[0]
@@ -28,7 +30,7 @@ if os.path.exists(db_file):
 if str(tweet_id) != last_sent_id:
     payload = {
         "username": "Heuresia Socials",
-        "avatar_url": "https://twoja_strona.com/logo.png",
+        "avatar_url": "https://media.discordapp.net/attachments/1260654667608621177/1526930523560087793/heuresia-1c-mark-dark.png?ex=6a5a21dd&is=6a58d05d&hm=c6e593c26c77066dbb8f5fabc1ab087601d83011162e4f34effb101af412cd34&=&format=webp&quality=lossless&width=857&height=857",
         "content": tweet_url
     }
     requests.post(DISCORD_WEBHOOK, json=payload)
@@ -41,6 +43,6 @@ if str(tweet_id) != last_sent_id:
     os.system('git add last_tweet.txt')
     os.system('git commit -m "chore: update last sent tweet ID"')
     os.system('git push')
-    print("Wysłano nowy Tweet na Discorda!")
+    print("New tweet sent to Discord!")
 else:
-    print("Brak nowych tweetów.")
+    print("No new tweets.")
