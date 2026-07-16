@@ -54,9 +54,24 @@ def send_to_discord(content):
     response.raise_for_status()
 
 
+def patch_tweety_pinned_tweet():
+    from tweety.types.usertweet import UserTweets
+
+    original = UserTweets._get_pinned_tweet
+
+    def safe_get_pinned_tweet(self, response):
+        try:
+            return original(self, response)
+        except Exception:
+            return None
+
+    UserTweets._get_pinned_tweet = safe_get_pinned_tweet
+
+
 def fetch_x_posts():
     from tweety import Twitter
 
+    patch_tweety_pinned_tweet()
     print(f"[x] fetching @{TWITTER_USERNAME}")
     app = Twitter("session")
     app.load_auth_token(TWITTER_AUTH_TOKEN)
@@ -126,10 +141,45 @@ def parse_linkedin(raw_list, label):
     return items
 
 
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+LINKEDIN_ID_PATTERN = re.compile(r"(\d{15,})")
+
+
+def parse_company_post(li):
+    link_tag = li.select_one("a.main-feed-card__overlay-link")
+    link = link_tag.get("href") if link_tag else None
+    article = li.select_one("article[data-activity-urn]")
+    urn = article.get("data-activity-urn") if article else None
+    if not link and urn:
+        link = f"https://www.linkedin.com/feed/update/{urn}"
+    id_source = f"{urn or ''} {link or ''}"
+    id_match = LINKEDIN_ID_PATTERN.search(id_source)
+    if not id_match:
+        return None
+    text_tag = li.select_one("p.attributed-text-segment-list__content")
+    snippet = text_tag.get_text(strip=True) if text_tag else ""
+    return {"id": id_match.group(1), "text": snippet, "url": link}
+
+
 def fetch_linkedin_company():
-    api = linkedin_client()
-    updates = api.get_company_updates(public_id=LINKEDIN_COMPANY, max_results=10)
-    return parse_linkedin(updates, "linkedin:company")
+    import bs4
+
+    url = f"https://www.linkedin.com/company/{LINKEDIN_COMPANY}/"
+    response = requests.get(
+        url,
+        headers={"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9"},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"LinkedIn returned HTTP {response.status_code} (bot wall)")
+    soup = bs4.BeautifulSoup(response.text, "lxml")
+    items = []
+    for li in soup.select("ul.updates__list > li"):
+        item = parse_company_post(li)
+        if item:
+            items.append(item)
+    print(f"[linkedin:company] page posts found={len(items)}")
+    return items
 
 
 def fetch_linkedin_profile():
@@ -194,15 +244,15 @@ def main():
         process_source(state, "x", fetch_x_posts, x_message, failures)
     else:
         print("[x] skipped: TWITTER_AUTH_TOKEN not set")
-    linkedin_ready = LINKEDIN_LI_AT and LINKEDIN_JSESSIONID
-    if linkedin_ready and LINKEDIN_COMPANY:
+    if LINKEDIN_COMPANY:
         label = LINKEDIN_COMPANY
         process_source(state, "linkedin:company", fetch_linkedin_company, linkedin_message(label), failures)
-    if linkedin_ready and LINKEDIN_PROFILE:
+    linkedin_cookie_ready = LINKEDIN_LI_AT and LINKEDIN_JSESSIONID
+    if linkedin_cookie_ready and LINKEDIN_PROFILE:
         label = LINKEDIN_PROFILE
         process_source(state, "linkedin:profile", fetch_linkedin_profile, linkedin_message(label), failures)
-    if not linkedin_ready and (LINKEDIN_COMPANY or LINKEDIN_PROFILE):
-        print("[linkedin] skipped: LINKEDIN_LI_AT / LINKEDIN_JSESSIONID not set")
+    if LINKEDIN_PROFILE and not linkedin_cookie_ready:
+        print("[linkedin:profile] skipped: LINKEDIN_LI_AT / LINKEDIN_JSESSIONID not set")
     save_state(state)
     if failures:
         sys.exit(f"failing sources: {', '.join(failures)}")

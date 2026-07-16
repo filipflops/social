@@ -1,3 +1,5 @@
 git+https://github.com/Ishannaik/tweety.git@fix/ondemand-home-fallback
 linkedin-api>=2.3.1
+beautifulsoup4
+lxml
 requests
