@@ -3,16 +3,25 @@ import os
 import re
 import sys
 import time
+import traceback
 
 import requests
 
+
+def clean_slug(value):
+    value = (value or "").strip().strip("@").strip()
+    if "/" in value:
+        value = value.rstrip("/").split("/")[-1]
+    return value
+
+
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 TWITTER_AUTH_TOKEN = os.getenv("TWITTER_AUTH_TOKEN")
-TWITTER_USERNAME = os.getenv("TWITTER_USERNAME", "heuresia")
+TWITTER_USERNAME = clean_slug(os.getenv("TWITTER_USERNAME")) or "heuresia"
 LINKEDIN_LI_AT = os.getenv("LINKEDIN_LI_AT", "")
 LINKEDIN_JSESSIONID = os.getenv("LINKEDIN_JSESSIONID", "")
-LINKEDIN_COMPANY = os.getenv("LINKEDIN_COMPANY", "")
-LINKEDIN_PROFILE = os.getenv("LINKEDIN_PROFILE", "")
+LINKEDIN_COMPANY = clean_slug(os.getenv("LINKEDIN_COMPANY"))
+LINKEDIN_PROFILE = clean_slug(os.getenv("LINKEDIN_PROFILE"))
 BOT_NAME = os.getenv("BOT_NAME", "Heuresia Socials")
 BOT_AVATAR_URL = os.getenv("BOT_AVATAR_URL", "")
 STATE_FILE = "state.json"
@@ -48,6 +57,7 @@ def send_to_discord(content):
 def fetch_x_posts():
     from tweety import Twitter
 
+    print(f"[x] fetching @{TWITTER_USERNAME}")
     app = Twitter("session")
     app.load_auth_token(TWITTER_AUTH_TOKEN)
     tweets = list(app.get_tweets(TWITTER_USERNAME))
@@ -71,9 +81,14 @@ def linkedin_client():
     return Linkedin("", "", cookies=jar)
 
 
-def find_activity_id(obj):
-    match = re.search(r"urn:li:activity:(\d+)", json.dumps(obj))
-    return match.group(1) if match else None
+LINKEDIN_URN_PATTERN = re.compile(r"urn:li:(activity|ugcPost|share):(\d+)")
+
+
+def find_post_urn(obj):
+    match = LINKEDIN_URN_PATTERN.search(json.dumps(obj))
+    if not match:
+        return None, None
+    return f"urn:li:{match.group(1)}:{match.group(2)}", match.group(2)
 
 
 def find_texts(obj):
@@ -91,28 +106,36 @@ def find_texts(obj):
 
 
 def extract_linkedin_item(raw):
-    activity_id = find_activity_id(raw)
-    if not activity_id:
+    urn, post_id = find_post_urn(raw)
+    if not post_id:
         return None
     candidates = find_texts(raw)
     snippet = max(candidates, key=len) if candidates else ""
     return {
-        "id": activity_id,
+        "id": post_id,
         "text": snippet,
-        "url": f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}",
+        "url": f"https://www.linkedin.com/feed/update/{urn}",
     }
+
+
+def parse_linkedin(raw_list, label):
+    items = [item for item in (extract_linkedin_item(r) for r in raw_list) if item]
+    print(f"[{label}] raw={len(raw_list)} parsed={len(items)}")
+    if raw_list and not items:
+        print(f"[{label}] sample element: {json.dumps(raw_list[0])[:500]}")
+    return items
 
 
 def fetch_linkedin_company():
     api = linkedin_client()
     updates = api.get_company_updates(public_id=LINKEDIN_COMPANY, max_results=10)
-    return [item for item in (extract_linkedin_item(u) for u in updates) if item]
+    return parse_linkedin(updates, "linkedin:company")
 
 
 def fetch_linkedin_profile():
     api = linkedin_client()
     posts = api.get_profile_posts(public_id=LINKEDIN_PROFILE, post_count=10)
-    return [item for item in (extract_linkedin_item(p) for p in posts) if item]
+    return parse_linkedin(posts, "linkedin:profile")
 
 
 def x_message(item):
@@ -137,6 +160,7 @@ def process_source(state, key, fetch, format_message, failures):
         items = fetch()
     except Exception as exc:
         print(f"[{key}] fetch failed: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
         failures.append(key)
         return
     items = [i for i in items if i.get("id") and str(i["id"]).isdigit()]
